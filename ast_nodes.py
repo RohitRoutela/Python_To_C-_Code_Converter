@@ -1,11 +1,13 @@
 # ast_nodes.py
 
 class ASTNode:
+    # Base class for all nodes in the Abstract Syntax Tree
     pass
 
 
 class Program(ASTNode):
     def __init__(self, statements):
+        # Root node containing all program statements
         self.statements = statements
 
     def __repr__(self):
@@ -14,6 +16,7 @@ class Program(ASTNode):
 
 class AssignmentNode(ASTNode):
     def __init__(self, identifier, expression, comments=None):
+        # Represents a variable assignment operation
         self.identifier = identifier
         self.expression = expression
         self.comments = comments
@@ -24,6 +27,7 @@ class AssignmentNode(ASTNode):
 
 class IfNode(ASTNode):
     def __init__(self, condition, true_branch, false_branch=None):
+        # Represents an if-else conditional structure
         self.condition = condition
         self.true_branch = true_branch
         self.false_branch = false_branch
@@ -34,6 +38,7 @@ class IfNode(ASTNode):
 
 class WhileNode(ASTNode):
     def __init__(self, condition, body):
+        # Represents a while loop structure
         self.condition = condition
         self.body = body
 
@@ -43,6 +48,7 @@ class WhileNode(ASTNode):
 
 class ForNode(ASTNode):
     def __init__(self, variable, iterable, body):
+        # Represents a for loop iterating over a sequence
         self.variable = variable
         self.iterable = iterable
         self.body = body
@@ -53,6 +59,7 @@ class ForNode(ASTNode):
 
 class PrintNode(ASTNode):
     def __init__(self, expression):
+        # Represents a print statement
         self.expression = expression
 
     def __repr__(self):
@@ -61,6 +68,7 @@ class PrintNode(ASTNode):
 
 class BinaryOpNode(ASTNode):
     def __init__(self, left, operator, right):
+        # Represents a binary operation (e.g., +, -, *, /, etc.)
         self.left = left
         self.operator = operator
         self.right = right
@@ -71,6 +79,7 @@ class BinaryOpNode(ASTNode):
 
 class IdentifierNode(ASTNode):
     def __init__(self, name):
+        # Represents a variable reference
         self.name = name
 
     def __repr__(self):
@@ -79,6 +88,7 @@ class IdentifierNode(ASTNode):
 
 class NumberNode(ASTNode):
     def __init__(self, value):
+        # Represents a numeric literal (int or float)
         self.value = value
 
     def __repr__(self):
@@ -87,6 +97,7 @@ class NumberNode(ASTNode):
 
 class StringNode(ASTNode):
     def __init__(self, value):
+        # Represents a string literal
         self.value = value
 
     def __repr__(self):
@@ -95,6 +106,7 @@ class StringNode(ASTNode):
 
 class FunctionCallNode(ASTNode):
     def __init__(self, function_name, arguments):
+        # Represents a function call with arguments
         self.function_name = function_name
         self.arguments = arguments
 
@@ -104,6 +116,7 @@ class FunctionCallNode(ASTNode):
 
 class FunctionDefNode(ASTNode):
     def __init__(self, name, parameters, body):
+        # Represents a function definition
         self.name = name
         self.parameters = parameters
         self.body = body
@@ -114,6 +127,7 @@ class FunctionDefNode(ASTNode):
 
 class ReturnNode(ASTNode):
     def __init__(self, value):
+        # Represents a return statement in a function
         self.value = value
 
     def __repr__(self):
@@ -121,4 +135,23 @@ class ReturnNode(ASTNode):
 
 
 class ExpressionNode(ASTNode):
+    # Base class for all expression nodes
     pass
+
+
+class ListNode(ASTNode):
+    def __init__(self, elements):
+        # Represents a list literal with elements
+        self.elements = elements
+
+    def __repr__(self):
+        return f"ListNode({self.elements})"
+
+
+class InputNode(ASTNode):
+    def __init__(self, prompt):
+        # Represents an input operation with optional prompt
+        self.prompt = prompt
+
+    def __repr__(self):
+        return f"InputNode(prompt={self.prompt})"
