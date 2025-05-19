@@ -33,6 +33,36 @@ class CustomNodeConverter(ast.NodeVisitor):
         else:
             raise Exception(f"Unsupported constant type: {type(node.value)}")
 
+    def visit_List(self, node):
+        # Handle Python list literals like [1, 2, 3]
+        elements = [self.visit(elt) for elt in node.elts]
+        return ListNode(elements)
+
+    def visit_Compare(self, node):
+        # Handle comparison operations
+        op_map = {
+            ast.Eq: '==',
+            ast.NotEq: '!=',
+            ast.Lt: '<',
+            ast.LtE: '<=',
+            ast.Gt: '>',
+            ast.GtE: '>=',
+        }
+        
+        # Get the left part of the comparison
+        left = self.visit(node.left)
+        
+        # We only handle the first comparison operation for now
+        if len(node.ops) > 0 and len(node.comparators) > 0:
+            op_type = type(node.ops[0])
+            right = self.visit(node.comparators[0])
+            
+            if op_type in op_map:
+                operator = op_map[op_type]
+                return BinaryOpNode(left, operator, right)
+        
+        raise Exception(f"Unsupported comparison operation")
+
     def visit_Call(self, node):
         func_name = node.func.id if isinstance(node.func, ast.Name) else "<unknown_func>"
         args = [self.visit(arg) for arg in node.args]
@@ -119,5 +149,22 @@ class CustomNodeConverter(ast.NodeVisitor):
         body = [self.visit(stmt) for stmt in node.body]
         return FunctionDefNode(name, parameters, body)
 
+    # Handle list indexing (Subscript nodes)
+    def visit_Subscript(self, node):
+        # Get the list/container being indexed
+        container = self.visit(node.value)
+        
+        # Get the index value
+        if isinstance(node.slice, ast.Index):
+            # For older Python versions
+            index = self.visit(node.slice.value)
+        else:
+            # For Python 3.9+ where the slice is directly the index
+            index = self.visit(node.slice)
+            
+        # Return a function call node representing list access
+        # This will be processed in the code generator to proper C++ syntax
+        return FunctionCallNode("__list_access__", [container, index])
+    
     def generic_visit(self, node):
         raise Exception(f"Unsupported AST node: {type(node).__name__}")
