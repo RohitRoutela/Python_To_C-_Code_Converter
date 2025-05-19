@@ -102,6 +102,29 @@ class IRGenerator:
                 op = op_map.get(type(node.op), str(type(node.op).__name__))
                 return ('binop', op, left, right)
                 
+            # Process Python AST comparison operations
+            elif isinstance(node, ast.Compare):
+                # Handle comparison operations
+                left = self.generate(node.left)
+                
+                # Process the first comparison operator and right operand
+                if len(node.ops) > 0 and len(node.comparators) > 0:
+                    right = self.generate(node.comparators[0])
+                    
+                    op_map = {
+                        ast.Eq: '==',
+                        ast.NotEq: '!=',
+                        ast.Lt: '<',
+                        ast.LtE: '<=',
+                        ast.Gt: '>',
+                        ast.GtE: '>=',
+                    }
+                    
+                    op = op_map.get(type(node.ops[0]), str(type(node.ops[0]).__name__))
+                    return ('compare', op, left, right)
+                
+                raise Exception(f"Invalid comparison operation")
+                
             # Process Python AST f-strings
             elif isinstance(node, ast.JoinedStr):
                 parts = []
