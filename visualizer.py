@@ -244,6 +244,11 @@ class VisualizerApp:
         try:
             self.status_var.set("Converting...")
             self.root.update()
+            
+            # Clear the output text area before converting
+            self.output_text.delete('1.0', tk.END)
+            self.output_text.update_line_numbers()
+            self.root.update()
 
             # Step 1: Parse to Python AST
             python_ast = ast.parse(code)
@@ -252,10 +257,12 @@ class VisualizerApp:
             custom_ast = CustomNodeConverter().visit(python_ast)
 
             # Step 3: Generate IR
+            self.ir_generator = IRGenerator()  # Reset the IR generator for each conversion
             self.ir_generator.generate(custom_ast)
             ir = self.ir_generator.get_instructions()
 
             # Step 4: Generate C++ code
+            self.code_generator = CodeGenerator()  # Reset the code generator for each conversion
             cplusplus_code = self.code_generator.generate(ir)
             
             # Ensure we got a valid string
