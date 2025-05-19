@@ -1,7 +1,8 @@
 class CodeGenerator:
     def __init__(self):
         # Initialize the code generator with empty state
-        self.code = []
+        self.code = []  # Regular code for inside main()
+        self.functions = []  # Function definitions to be placed outside main()
         self.declared_vars = {}
         self.indentation_level = 1  # Main function indentation level
         self.error_context = ""
@@ -75,15 +76,12 @@ class CodeGenerator:
                 elif instruction_type == 'print':
                     expr = self.generate_expr(ir[1])
                     
-                    # Don't apply to_string if it's already a string expression
-                    if ir[1][0] == 'binop' and ir[1][1] == '+' and self._is_string_expr(ir[1][2]):
-                        # For concatenation where the first part is a string, don't add to_string
-                        self.code.append(self._indent(f"cout << {expr} << endl;"))
-                    elif self._is_string_expr(ir[1]):
-                        # For string literals or variables that are strings
-                        self.code.append(self._indent(f"cout << {expr} << endl;"))
-                    else:
-                        self.code.append(self._indent(f"cout << {expr} << endl;"))
+                    # Handle cases where expression is already a string conversion
+                    if isinstance(expr, tuple) and expr[0] == 'already_string':
+                        expr = expr[1]  # Extract the actual string expression
+                    
+                    # We want to use the simplest possible print statement
+                    self.code.append(self._indent(f"cout << {expr} << endl;"))
 
                 # If-else statement
                 elif instruction_type == 'if':
@@ -98,11 +96,34 @@ class CodeGenerator:
                     self.code.append(self._indent("}"))
 
                     if false_branch:
-                        self.code.append(self._indent("else {"))
-                        self.indentation_level += 1
-                        self.code.extend(false_branch)
-                        self.indentation_level -= 1
-                        self.code.append(self._indent("}"))
+                        # Check if false branch starts with another if statement
+                        # This indicates an elif in Python
+                        if len(ir[3]) > 0 and isinstance(ir[3][0], tuple) and ir[3][0][0] == 'if':
+                            # This is an "elif" in Python, which becomes "else if" in C++
+                            nested_if = ir[3][0]
+                            nested_condition = self.generate_expr(nested_if[1])
+                            nested_true = self.generate_block(nested_if[2])
+                            nested_false = self.generate_block(nested_if[3]) if len(nested_if) > 3 and nested_if[3] else []
+                            
+                            self.code.append(self._indent(f"else if ({nested_condition}) {{"))
+                            self.indentation_level += 1
+                            self.code.extend(nested_true)
+                            self.indentation_level -= 1
+                            self.code.append(self._indent("}"))
+                            
+                            if nested_false:
+                                self.code.append(self._indent("else {"))
+                                self.indentation_level += 1
+                                self.code.extend(nested_false)
+                                self.indentation_level -= 1
+                                self.code.append(self._indent("}"))
+                        else:
+                            # Regular else block
+                            self.code.append(self._indent("else {"))
+                            self.indentation_level += 1
+                            self.code.extend(false_branch)
+                            self.indentation_level -= 1
+                            self.code.append(self._indent("}"))
 
                 # While loop
                 elif instruction_type == 'while':
@@ -153,36 +174,59 @@ class CodeGenerator:
                     
                     # Special handling for string concatenation
                     if operator == '+':
-                        # For string concatenation, only convert non-string values to string
-                        left_is_string = (
-                            isinstance(ir[2], tuple) and 
-                            ((ir[2][0] == 'const' and isinstance(ir[2][1], str)) or (ir[2][0] == 'var' and ir[2][1] in self.declared_vars and self.declared_vars[ir[2][1]] == 'string'))
-                        )
+                        # Determine if left and right are strings or need conversion
+                        left_is_string = self._is_string_literal_or_var(ir[2])
+                        right_is_string = self._is_string_literal_or_var(ir[3])
                         
-                        right_is_string = (
-                            isinstance(ir[3], tuple) and 
-                            ((ir[3][0] == 'const' and isinstance(ir[3][1], str)) or (ir[3][0] == 'var' and ir[3][1] in self.declared_vars and self.declared_vars[ir[3][1]] == 'string'))
-                        )
-                        
-                        # If either side is a string, we need a string concatenation
-                        if left_is_string or right_is_string:
-                            # Only convert non-string expressions to string
-                            if not left_is_string and not (
-                                isinstance(ir[2], tuple) and ir[2][0] == 'var' and 
-                                self.declared_vars.get(ir[2][1]) == 'string'
-                            ):
-                                left = f"to_string({left})"
-                                
-                            if not right_is_string and not (
-                                isinstance(ir[3], tuple) and ir[3][0] == 'var' and
-                                self.declared_vars.get(ir[3][1]) == 'string'
-                            ):
+                        # Generate appropriate concatenation expressions
+                        if left_is_string and right_is_string:
+                            # Both are strings, direct concatenation
+                            return f"{left} + {right}"
+                        elif left_is_string:
+                            # Right needs conversion (if not already a string)
+                            if isinstance(ir[3], tuple) and ir[3][0] == 'function_call' and ir[3][1] == 'str':
+                                # This is str() call - use the argument directly with to_string if needed
+                                if len(ir[3][2]) == 1:
+                                    arg = ir[3][2][0]
+                                    if isinstance(arg, tuple) and arg[0] == 'const' and isinstance(arg[1], str):
+                                        # String constant inside str() - no need for to_string
+                                        return f"{left} + {self.generate_expr(arg)}"
+                                    else:
+                                        # Non-string inside str() - apply to_string once
+                                        inner_expr = self.generate_expr(arg)
+                                        return f"{left} + to_string({inner_expr})"
+                            elif not self._is_already_string(right):
                                 right = f"to_string({right})"
-                            
-                            return f"({left} + {right})"
+                            return f"{left} + {right}"
+                        elif right_is_string:
+                            # Left needs conversion (if not already a string)
+                            if isinstance(ir[2], tuple) and ir[2][0] == 'function_call' and ir[2][1] == 'str':
+                                # This is str() call - use the argument directly with to_string if needed
+                                if len(ir[2][2]) == 1:
+                                    arg = ir[2][2][0]
+                                    if isinstance(arg, tuple) and arg[0] == 'const' and isinstance(arg[1], str):
+                                        # String constant inside str() - no need for to_string
+                                        return f"{self.generate_expr(arg)} + {right}"
+                                    else:
+                                        # Non-string inside str() - apply to_string once
+                                        inner_expr = self.generate_expr(arg)
+                                        return f"to_string({inner_expr}) + {right}"
+                            elif not self._is_already_string(left):
+                                left = f"to_string({left})"
+                            return f"{left} + {right}"
+                        else:
+                            # Both need conversion
+                            if not self._is_already_string(left):
+                                left = f"to_string({left})"
+                            if not self._is_already_string(right):
+                                right = f"to_string({right})"
+                            return f"{left} + {right}"
                     
+                    # Simple expressions don't need extra parentheses
                     if operator == '**':
                         return f"pow({left}, {right})"
+                    elif self._is_simple_expr(left) and self._is_simple_expr(right):
+                        return f"{left} {operator} {right}"
                     else:
                         return f"({left} {operator} {right})"
 
@@ -212,7 +256,22 @@ class CodeGenerator:
                 # List/vector
                 elif instruction_type == 'list':
                     elements = [self.generate_expr(elem) for elem in ir[1]]
-                    return f"vector<auto>{{{', '.join(elements)}}}"
+                    # Try to determine the element type
+                    if elements:
+                        if all(self.is_numeric(elem) for elem in ir[1]):
+                            if any(isinstance(elem[1], float) for elem in ir[1] if isinstance(elem, tuple) and elem[0] == 'const'):
+                                return f"vector<double>{{{', '.join(elements)}}}"
+                            else:
+                                return f"vector<int>{{{', '.join(elements)}}}"
+                        elif all(self.is_string(elem) for elem in ir[1]):
+                            # Ensure all string elements have quotes
+                            return f"vector<string>{{{', '.join(elements)}}}"
+                        else:
+                            # Mixed type or complex types
+                            return f"vector<auto>{{{', '.join(elements)}}}"
+                    else:
+                        # Empty list
+                        return "vector<auto>{}"
 
                 # Function call
                 elif instruction_type == 'function_call':
@@ -225,6 +284,14 @@ class CodeGenerator:
                         if isinstance(arg_expr, tuple):
                             arg_expr = str(arg_expr)
                         arguments.append(str(arg_expr))
+                    
+                    # Special handling for list access
+                    if func_name == "__list_access__" and len(arguments) == 2:
+                        # This is our special marker for list indexing
+                        container = arguments[0]
+                        index = arguments[1]
+                        return f"{container}[{index}]"
+                        
                     arguments_str = ", ".join(arguments)
                     
                     # Handle special function translations
@@ -244,6 +311,32 @@ class CodeGenerator:
                         return f"stod({arguments_str})"
                     elif func_name == 'str':
                         # Handle string conversion for C++
+                        # Check the argument type to determine the best way to convert
+                        if len(ir[2]) == 1:
+                            arg = ir[2][0]
+                            if isinstance(arg, tuple):
+                                if arg[0] == 'const':
+                                    # For constants, we can simplify
+                                    if isinstance(arg[1], (int, float)):
+                                        return f"to_string({arguments_str})"
+                                    elif isinstance(arg[1], str):
+                                        # String constants don't need conversion
+                                        return arguments_str
+                                    elif isinstance(arg[1], bool):
+                                        # Convert boolean to string
+                                        return f"({arguments_str} ? \"true\" : \"false\")"
+                                elif arg[0] == 'var':
+                                    var_name = arg[1]
+                                    if var_name in self.declared_vars:
+                                        if self.declared_vars[var_name] in ['int', 'double', 'float']:
+                                            return f"to_string({arguments_str})"
+                                        elif self.declared_vars[var_name] == 'bool':
+                                            return f"({arguments_str} ? \"true\" : \"false\")"
+                                        elif self.declared_vars[var_name] == 'string':
+                                            # No need to convert strings
+                                            return arguments_str
+                                
+                        # Default case: apply to_string
                         return f"to_string({arguments_str})"
                     elif func_name == 'bool':
                         # For 'bool()', create proper C++ boolean casting
@@ -264,11 +357,19 @@ class CodeGenerator:
                     body = self.generate_block(ir[3])
                     
                     param_str = ", ".join([f"auto {p}" for p in params])
-                    self.code.append(self._indent(f"auto {name}({param_str}) {{"))
-                    self.indentation_level += 1
-                    self.code.extend(body)
-                    self.indentation_level -= 1
-                    self.code.append(self._indent("}"))
+                    # Store function definitions separately (outside main)
+                    saved_indent = self.indentation_level
+                    self.indentation_level = 0  # No indentation for functions outside main
+                    
+                    function_code = []
+                    function_code.append(self._indent(f"auto {name}({param_str}) {{"))
+                    self.indentation_level = 1  # Indent function body
+                    function_code.extend(body)
+                    self.indentation_level = 0  # Reset for closing brace
+                    function_code.append(self._indent("}"))
+                    
+                    self.functions.append("\n".join(function_code))
+                    self.indentation_level = saved_indent  # Restore indentation level
 
                 # Return statement
                 elif instruction_type == 'return':
@@ -303,6 +404,10 @@ class CodeGenerator:
         if isinstance(ir, tuple):
             instruction_type = ir[0]
             
+            # Check for already converted string marker
+            if instruction_type == 'already_string':
+                return ir[1]  # Return the string expression without additional conversion
+            
             if instruction_type == 'binop':
                 left = self.generate_expr(ir[2])
                 right = self.generate_expr(ir[3])
@@ -310,38 +415,73 @@ class CodeGenerator:
                 
                 # Special handling for string concatenation
                 if operator == '+':
-                    # For string concatenation, only convert non-string values to string
-                    left_is_string = (
-                        isinstance(ir[2], tuple) and 
-                        ((ir[2][0] == 'const' and isinstance(ir[2][1], str)) or (ir[2][0] == 'var' and ir[2][1] in self.declared_vars and self.declared_vars[ir[2][1]] == 'string'))
-                    )
+                    # Determine if left and right are strings or need conversion
+                    left_is_string = self._is_string_literal_or_var(ir[2])
+                    right_is_string = self._is_string_literal_or_var(ir[3])
                     
-                    right_is_string = (
-                        isinstance(ir[3], tuple) and 
-                        ((ir[3][0] == 'const' and isinstance(ir[3][1], str)) or (ir[3][0] == 'var' and ir[3][1] in self.declared_vars and self.declared_vars[ir[3][1]] == 'string'))
-                    )
-                    
-                    # If either side is a string, we need a string concatenation
-                    if left_is_string or right_is_string:
-                        # Only convert non-string expressions to string
-                        if not left_is_string and not (
-                            isinstance(ir[2], tuple) and ir[2][0] == 'var' and 
-                            self.declared_vars.get(ir[2][1]) == 'string'
-                        ):
-                            left = f"to_string({left})"
-                            
-                        if not right_is_string and not (
-                            isinstance(ir[3], tuple) and ir[3][0] == 'var' and
-                            self.declared_vars.get(ir[3][1]) == 'string'
-                        ):
+                    # Generate appropriate concatenation expressions
+                    if left_is_string and right_is_string:
+                        # Both are strings, direct concatenation
+                        return f"{left} + {right}"
+                    elif left_is_string:
+                        # Right needs conversion (if not already a string)
+                        if isinstance(ir[3], tuple) and ir[3][0] == 'function_call' and ir[3][1] == 'str':
+                            # This is str() call - use the argument directly with to_string if needed
+                            if len(ir[3][2]) == 1:
+                                arg = ir[3][2][0]
+                                if isinstance(arg, tuple) and arg[0] == 'const' and isinstance(arg[1], str):
+                                    # String constant inside str() - no need for to_string
+                                    return f"{left} + {self.generate_expr(arg)}"
+                                else:
+                                    # Non-string inside str() - apply to_string once
+                                    inner_expr = self.generate_expr(arg)
+                                    return f"{left} + to_string({inner_expr})"
+                        elif not self._is_already_string(right):
                             right = f"to_string({right})"
-                        
-                        return f"({left} + {right})"
+                        return f"{left} + {right}"
+                    elif right_is_string:
+                        # Left needs conversion (if not already a string)
+                        if isinstance(ir[2], tuple) and ir[2][0] == 'function_call' and ir[2][1] == 'str':
+                            # This is str() call - use the argument directly with to_string if needed
+                            if len(ir[2][2]) == 1:
+                                arg = ir[2][2][0]
+                                if isinstance(arg, tuple) and arg[0] == 'const' and isinstance(arg[1], str):
+                                    # String constant inside str() - no need for to_string
+                                    return f"{self.generate_expr(arg)} + {right}"
+                                else:
+                                    # Non-string inside str() - apply to_string once
+                                    inner_expr = self.generate_expr(arg)
+                                    return f"to_string({inner_expr}) + {right}"
+                        elif not self._is_already_string(left):
+                            left = f"to_string({left})"
+                        return f"{left} + {right}"
+                    else:
+                        # Both need conversion
+                        if not self._is_already_string(left):
+                            left = f"to_string({left})"
+                        if not self._is_already_string(right):
+                            right = f"to_string({right})"
+                        return f"{left} + {right}"
                 
+                # Simple expressions don't need extra parentheses
                 if operator == '**':
                     return f"pow({left}, {right})"
+                elif self._is_simple_expr(left) and self._is_simple_expr(right):
+                    return f"{left} {operator} {right}"
                 else:
                     return f"({left} {operator} {right})"
+            
+            elif instruction_type == 'compare':
+                left = self.generate_expr(ir[2])
+                right = self.generate_expr(ir[3])
+                operator = ir[1]
+                
+                # Simple expressions don't need extra parentheses
+                if self._is_simple_expr(left) and self._is_simple_expr(right):
+                    return f"{left} {operator} {right}"
+                else:
+                    return f"({left} {operator} {right})"
+                
             else:
                 try:
                     result = self.generate(ir)
@@ -354,22 +494,64 @@ class CodeGenerator:
             return str(ir)
         return ir if ir is not None else ""
 
+    def _is_simple_expr(self, expr):
+        """Check if an expression is simple enough to not need parentheses"""
+        # If it's a variable name, constant, or simple function call
+        if isinstance(expr, str):
+            # Check if it's a simple identifier, number, or string literal
+            return (expr.isalnum() or 
+                   (expr.startswith('"') and expr.endswith('"')) or
+                   (expr.startswith("'") and expr.endswith("'")) or
+                   expr.isdigit() or
+                   expr == "true" or
+                   expr == "false" or
+                   (expr.startswith("to_string(") and expr.endswith(")")) or
+                   not any(op in expr for op in "+-*/%<>=!&|^~"))
+        return False
+
     def _is_string_expr(self, ir):
         # Check if an expression is a string type
         if isinstance(ir, tuple):
             if ir[0] == 'const' and isinstance(ir[1], str):
                 return True
             elif ir[0] == 'var':
-                # This is a simplification - ideally would check variable type
-                return True
+                var_name = ir[1]
+                return var_name in self.declared_vars and self.declared_vars[var_name] == 'string'
             elif ir[0] == 'function_call' and ir[1] in ['str', 'to_string']:
                 return True
+            elif ir[0] == 'already_string':
+                return True
         return False
-
+        
+    def _is_string_literal_or_var(self, ir):
+        # Check if an expression is a string literal or a variable
+        if isinstance(ir, tuple):
+            if ir[0] == 'const' and isinstance(ir[1], str):
+                return True
+            elif ir[0] == 'var':
+                var_name = ir[1]
+                return var_name in self.declared_vars and self.declared_vars[var_name] == 'string'
+        return False
+ 
+    def _is_already_string(self, ir):
+        # Check if an expression is already a string
+        if isinstance(ir, tuple):
+            if ir[0] == 'already_string':
+                return True
+            elif ir[0] == 'const' and isinstance(ir[1], str):
+                return True
+            elif ir[0] == 'var' and ir[1] in self.declared_vars and self.declared_vars[ir[1]] == 'string':
+                return True
+            elif ir[0] == 'function_call' and ir[1] == 'str':
+                return True
+        elif isinstance(ir, str) and (ir.startswith('"') or ir.startswith("'")):
+            return True
+        return False
+    
     def _is_known_string_var(self, var_name):
         # Check if a variable is known to be a string
         return var_name in self.declared_vars and self.declared_vars[var_name] == 'string'
-
+    
     def generate_block(self, ir_block):
         # Generate a block of code while preserving the outer context
         saved_code = self.code
@@ -458,10 +640,46 @@ class CodeGenerator:
 
     def get_cpp_code(self):
         # Generate the complete C++ program with includes and main function
-        header_code = "#include <bits/stdc++.h>\nusing namespace std;\n\n"
+        header_code = "#include <bits/stdc++.h>\n#include <vector>\n#include <string>\nusing namespace std;\n\n"
         
-        cpp_code = header_code + "int main() {\n"
+        # Add function declarations before main
+        functions_code = ""
+        if self.functions:
+            functions_code = "\n".join(self.functions) + "\n\n"
+            
+        # Generate main function with the rest of the code
+        main_code = "int main() {\n"
         if self.code:
-            cpp_code += "\n".join(filter(None, self.code))
-        cpp_code += "\n    return 0;\n}"
+            main_code += "\n".join(filter(None, self.code))
+        main_code += "\n    return 0;\n}"
+        
+        # Combine all parts
+        cpp_code = header_code + functions_code + main_code
         return cpp_code
+
+    def is_numeric(self, expr):
+        """Check if an expression is numeric (int or float)."""
+        if isinstance(expr, tuple):
+            if expr[0] == 'const':
+                return isinstance(expr[1], (int, float))
+            elif expr[0] == 'var':
+                var_name = expr[1]
+                if var_name in self.declared_vars:
+                    return self.declared_vars[var_name] in ['int', 'double']
+            elif expr[0] == 'binop':
+                # Numeric operations typically yield numeric results
+                return self.is_numeric(expr[2]) and self.is_numeric(expr[3])
+        return False
+        
+    def is_string(self, expr):
+        """Check if an expression is a string."""
+        if isinstance(expr, tuple):
+            if expr[0] == 'const':
+                return isinstance(expr[1], str)
+            elif expr[0] == 'var':
+                var_name = expr[1]
+                if var_name in self.declared_vars:
+                    return self.declared_vars[var_name] == 'string'
+            elif expr[0] == 'already_string':
+                return True
+        return False
